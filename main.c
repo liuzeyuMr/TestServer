@@ -9,6 +9,7 @@
 #include <ctype.h>
 #include <arpa/inet.h>
 #include <signal.h>
+#include <poll.h>
 #include <wait.h>
 #include "warp.h"
 #define MAXLINE 4096
@@ -215,14 +216,107 @@ int Server_select(){
     return 0;
 }
 
+int Server_poll(){
+    int i , j , n ,maxi;
+    int nready;
+    int maxfd,listenfd,connfd,sockfd;
+    char buff[BUFSIZ],str[INET_ADDRSTRLEN];
+    struct pollfd client[FD_SETSIZE];
+    struct  sockaddr_in seraddr ,client_addr;
+    socklen_t  clie_addr_len;
 
+    listenfd = Socket(AF_INET,SOCK_STREAM,0);
+
+    memset(&seraddr,0,sizeof(seraddr));
+    seraddr.sin_family=AF_INET;
+    seraddr.sin_port = htons(SERV_PORT);
+    seraddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    int opt = 1;
+    setsockopt(listenfd,SOL_SOCKET,SO_REUSEADDR,&opt,(socklen_t)sizeof(opt));
+    Bind(listenfd,(struct sockaddr*)&seraddr,sizeof(seraddr));
+    Listen(listenfd,128);
+    client[0].fd = listenfd;
+    client[0].events = POLL_IN;
+    maxi=0;
+    for (i=1;i<FD_SETSIZE;i++)
+        client[i].fd = -1;
+
+    while(1){
+        nready = poll(client,maxi+1,-1);
+        if (nready < 0){
+            perr_exit("select error");
+        }
+        if (client[0].revents & POLL_IN){ //have a client apply to connect ,get the connect and add to the allset
+            clie_addr_len = sizeof(client_addr);
+            connfd = Accept(listenfd,(struct sockaddr *)&client_addr,&clie_addr_len);
+            printf("receive from %s at port %d \n",
+                   inet_ntop(AF_INET,&client_addr.sin_addr,str, sizeof(str)),
+                   ntohs(client_addr.sin_port));
+
+            for (i =0;i<FD_SETSIZE;i++){
+                if (client[i].fd < 0){ //save the connect fd
+                    printf("client[%d] is %d \n",i,connfd);
+                    client[i].fd = connfd;
+                    break;
+                }
+            }
+            if ( i == FD_SETSIZE){
+                perr_exit("too many clients ");
+            }
+
+            client[i].events = POLL_IN; //新加入的FD监听读事件
+
+            if (maxi < i){
+                maxi = i;
+            }
+            if (--nready == 0)
+                continue;
+        }
+
+
+        for (i =1;i<=maxi;i++){
+            sockfd = client[i].fd;
+            if (sockfd<0)
+                continue;
+            if (client[i].revents &POLL_IN){
+                n=Read(sockfd,buff, sizeof(buff));
+                if(n < 0){
+                    if (errno == ECONNRESET){
+                        printf("client [%d] aborted connection \n",i);
+                        Close(sockfd);
+                        client[i].fd = -1;
+                    }
+                }
+                else if (n ==0){
+                    printf("client[%d] closed connection \n",i);
+                    close(sockfd);
+                    client[i].fd=-1;
+                } else{
+                    //buff[n]='\0';
+                    printf("recv msg for client buff : %s \n",buff);
+                    //int i;
+                    for (j=0;j<n;j++)
+                        buff[j] = toupper(buff[j]);
+                    printf("write msg to client buff : %s \n",buff);
+                    Write(sockfd,buff, sizeof(buff));
+                }
+                if (--nready <= 0)
+                    break;
+            }
+
+        }
+
+    }
+    close(listenfd);
+    return 0;
+}
 
 int main() {
 
 
    // Server_toupper();
    // Server_fork();
-   Server_select();
-
+   //Server_select();
+    Server_poll();
     return 0;
 }
