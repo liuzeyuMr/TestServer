@@ -10,10 +10,12 @@
 #include <arpa/inet.h>
 #include <signal.h>
 #include <poll.h>
+#include <sys/epoll.h>
 #include <wait.h>
 #include "warp.h"
 #define MAXLINE 4096
 #define SERV_PORT 6666
+#define OPEN_MAX 5000
 /**/
 //Socket简单大小写转换
 int Server_toupper(){
@@ -276,7 +278,7 @@ int Server_poll(){
 
         for (i =1;i<=maxi;i++){
             sockfd = client[i].fd;
-            if (sockfd<0)
+            if (sockfd<0) //这里还是会导致循环多次
                 continue;
             if (client[i].revents &POLL_IN){
                 n=Read(sockfd,buff, sizeof(buff));
@@ -311,12 +313,102 @@ int Server_poll(){
     return 0;
 }
 
+int Server_epoll()
+{
+    int listenfd , connfd ,socketfd, epfd , nready;
+
+    struct epoll_event evt ,evts[OPEN_MAX];
+    char buff[MAXLINE];
+    struct sockaddr_in seraddr , client;
+    socklen_t clientlen;
+    int res;
+    memset(&seraddr,0,sizeof(seraddr));
+    seraddr.sin_family=AF_INET;
+    seraddr.sin_port = htons(SERV_PORT);
+    seraddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    listenfd = Socket(AF_INET,SOCK_STREAM,0);
+    int opt = 1;
+    setsockopt(listenfd,SOL_SOCKET,SO_REUSEADDR,&opt, sizeof(opt));
+
+    Bind(listenfd,(struct sockaddr*)&seraddr, sizeof(seraddr));
+    Listen(listenfd , 20);//不要忘记设置listen文件描述符
+    epfd = epoll_create(10);
+    if (epfd == -1){
+        perr_exit("epoll_create error");
+    }
+    evt.events = EPOLLIN;
+    evt.data.fd = listenfd;
+    res = epoll_ctl(epfd,EPOLL_CTL_ADD,listenfd,&evt);
+    if (res == -1){
+        perr_exit("epoll_ctl error");
+    }
+    while (1){
+        nready = epoll_wait(epfd,evts,OPEN_MAX,-1);
+        if (nready == -1){
+            perr_exit("epoll_wait error");
+        }
+        int n;
+        for (n=0;n<nready;n++){
+            if (!(evts[n].events & EPOLLIN))
+                continue;
+            if (evts[n].data.fd == listenfd){ // 进行fd的比较
+                clientlen = sizeof(client);
+                connfd = Accept(listenfd,(struct sockaddr*)&client,&clientlen);
+                evt.events = EPOLLIN;
+                evt.data.fd =connfd;
+                int res;
+                res = epoll_ctl(epfd,EPOLL_CTL_ADD,connfd,&evt);
+                if (res == -1){
+                    perr_exit("epoll_ctl error");
+                }
+            } else{
+                socketfd = evts[n].data.fd;
+
+                n=Read(socketfd,buff, sizeof(buff));
+                if(n < 0){
+                    if (errno == ECONNRESET){
+                        printf("client aborted connection \n");
+                         int res = epoll_ctl(epfd,EPOLL_CTL_DEL,socketfd,NULL);
+                         close(socketfd);
+                        if (res == -1){
+                            perr_exit("epoll_ctl error");
+                        }
+                    }
+                }
+                else if (n ==0){
+                    printf("client closed connection \n");
+                    int res = epoll_ctl(epfd,EPOLL_CTL_DEL,socketfd,NULL);
+                    close(socketfd);
+                    if (res == -1){
+                        perr_exit("epoll_ctl error");
+                    }
+                } else{
+                    //buff[n]='\0';
+                    printf("recv msg for client buff : %s \n",buff);
+                    int j;
+                    for (j=0;j<n;j++)
+                        buff[j] = toupper(buff[j]);
+                    printf("write msg to client buff : %s \n",buff);
+                    Write(socketfd,buff, sizeof(buff));
+                }
+
+
+            }
+
+
+        }
+    }
+
+}
+
+
 int main() {
 
 
    // Server_toupper();
    // Server_fork();
    //Server_select();
-    Server_poll();
+   //Server_poll();
+    Server_epoll();
     return 0;
 }
