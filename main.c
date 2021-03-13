@@ -12,6 +12,7 @@
 #include <poll.h>
 #include <sys/epoll.h>
 #include <wait.h>
+#include <fcntl.h>
 #include "warp.h"
 #define MAXLINE 4096
 #define SERV_PORT 6666
@@ -336,9 +337,9 @@ int Server_epoll()
     if (epfd == -1){
         perr_exit("epoll_create error");
     }
-    evt.events = EPOLLIN;
+    evt.events = EPOLLIN | EPOLLET;
     evt.data.fd = listenfd;
-    res = epoll_ctl(epfd,EPOLL_CTL_ADD,listenfd,&evt);
+    res = epoll_ctl(epfd,EPOLL_CTL_ADD,listenfd,&evt); //增加listen监听事件
     if (res == -1){
         perr_exit("epoll_ctl error");
     }
@@ -354,7 +355,12 @@ int Server_epoll()
             if (evts[n].data.fd == listenfd){ // 进行fd的比较
                 clientlen = sizeof(client);
                 connfd = Accept(listenfd,(struct sockaddr*)&client,&clientlen);
-                evt.events = EPOLLIN;
+                /*设置非阻塞IO*/
+                int flag = fcntl(connfd,F_GETFL);
+                flag |= O_NONBLOCK;
+                fcntl(connfd,F_SETFL,flag);
+
+                evt.events = EPOLLIN | EPOLLET;
                 evt.data.fd =connfd;
                 int res;
                 res = epoll_ctl(epfd,EPOLL_CTL_ADD,connfd,&evt);
@@ -363,8 +369,15 @@ int Server_epoll()
                 }
             } else{
                 socketfd = evts[n].data.fd;
+                while (n=Read(socketfd,buff, sizeof(buff)) >0){
+                    printf("recv msg for client buff : %s \n",buff);
+                    int j;
+                    for (j=0;j<n;j++)
+                        buff[j] = toupper(buff[j]);
+                    printf("write msg to client buff : %s \n",buff);
+                    Write(socketfd,buff, sizeof(buff));
+                }
 
-                n=Read(socketfd,buff, sizeof(buff));
                 if(n < 0){
                     if (errno == ECONNRESET){
                         printf("client aborted connection \n");
@@ -375,22 +388,14 @@ int Server_epoll()
                         }
                     }
                 }
-                else if (n ==0){
+                /*else if (n ==0){
                     printf("client closed connection \n");
                     int res = epoll_ctl(epfd,EPOLL_CTL_DEL,socketfd,NULL);
                     close(socketfd);
                     if (res == -1){
                         perr_exit("epoll_ctl error");
                     }
-                } else{
-                    //buff[n]='\0';
-                    printf("recv msg for client buff : %s \n",buff);
-                    int j;
-                    for (j=0;j<n;j++)
-                        buff[j] = toupper(buff[j]);
-                    printf("write msg to client buff : %s \n",buff);
-                    Write(socketfd,buff, sizeof(buff));
-                }
+                }*/
 
 
             }
