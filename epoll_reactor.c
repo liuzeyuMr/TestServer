@@ -218,7 +218,7 @@ void initlistensocket(int efd, short port)
 
     return;
 }
-
+#if 0
 int main()
 {
     int port=SERV_PORT;
@@ -258,6 +258,7 @@ int main()
             printf("epoll_wait error, exit\n");
             exit(-1);
         }
+        /*处理返回的事件*/
         for(i = 0; i < nfd; i++)
         {
             //evtAdd()函数中，添加到监听树中监听事件的时候将myevents_t结构体类型给了ptr指针
@@ -277,3 +278,4 @@ int main()
     }
     return 0;
 }
+#endif
